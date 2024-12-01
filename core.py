@@ -50,8 +50,7 @@ class ReferenceFrame:
         position, rotation = self.get_transform()
 
         glPushMatrix()
-
-        # Apply accumulated transform
+        # Apply position first, then rotation
         glTranslatef(*position)
         rot_matrix = rotation.as_matrix()
         gl_matrix = np.eye(4)
@@ -83,27 +82,8 @@ class Earth(FramedObject):
 
     def _draw(self):
         glColor3f(0.0, 0.0, 1.0)
-        self.draw_wireframe_sphere()
-
-    def draw_wireframe_sphere(self, lats=30, longs=30):
-        for i in range(lats):
-            lat0 = math.pi * (-0.5 + float(i) / lats)
-            z0 = math.sin(lat0)
-            zr0 = math.cos(lat0)
-
-            lat1 = math.pi * (-0.5 + float(i + 1) / lats)
-            z1 = math.sin(lat1)
-            zr1 = math.cos(lat1)
-
-            glBegin(GL_LINE_STRIP)
-            for j in range(longs + 1):
-                lng = 2 * math.pi * float(j) / longs
-                x = math.cos(lng)
-                y = math.sin(lng)
-
-                glVertex3f(self.radius * x * zr0, self.radius * y * zr0, self.radius * z0)
-                glVertex3f(self.radius * x * zr1, self.radius * y * zr1, self.radius * z1)
-            glEnd()
+        # Draw at origin of frame
+        glutWireSphere(self.radius, 30, 30)
 
 class Satellite(FramedObject):
     def __init__(self, frame, orbit_radius=2.0):
@@ -217,15 +197,47 @@ class Axes(FramedObject):
             glVertex3f(0.0, 0.0, self.length)
             glEnd()
 
+class Sun(FramedObject):
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.radius = 3.0  # Even larger
+
+    def _draw(self):
+        glColor3f(1.0, 1.0, 0.0)  # Yellow
+        self.draw_wireframe_sphere()
+
+    def draw_wireframe_sphere(self, lats=30, longs=30):
+        for i in range(lats):
+            lat0 = math.pi * (-0.5 + float(i) / lats)
+            z0 = math.sin(lat0)
+            zr0 = math.cos(lat0)
+
+            lat1 = math.pi * (-0.5 + float(i + 1) / lats)
+            z1 = math.sin(lat1)
+            zr1 = math.cos(lat1)
+
+            glBegin(GL_LINE_STRIP)
+            for j in range(longs + 1):
+                lng = 2 * math.pi * float(j) / longs
+                x = math.cos(lng)
+                y = math.sin(lng)
+
+                glVertex3f(self.radius * x * zr0, self.radius * y * zr0, self.radius * z0)
+                glVertex3f(self.radius * x * zr1, self.radius * y * zr1, self.radius * z1)
+            glEnd()
+
 class Camera:
     def __init__(self):
-        self.distance = 5.0  # Distance from target
-        self.azimuth = 0.0   # Horizontal angle
-        self.elevation = 0.0  # Vertical angle
+        self.distance = 15.0  # Distance from target
+        self.min_distance = 5.0  # Minimum zoom
+        self.max_distance = 30.0  # Maximum zoom
+        self.azimuth = 0.0   # Angle in XY plane
+        self.elevation = 0.0  # Angle from XY plane
         self.rotation = Rotation.from_euler('xyz', [0, 0, 0])
         # For mouse control
         self.last_mouse = None
         self.mouse_sensitivity = 0.01
+        self.zoom_sensitivity = 0.5
         # For target tracking
         self.target_frame = None
 
@@ -233,56 +245,84 @@ class Camera:
         self.target_frame = frame
         print(f"Camera now targeting {frame.name}")
 
-    def update_rotation(self):
-        # Convert azimuth and elevation to rotation matrix
-        rot_az = Rotation.from_euler('y', np.radians(self.azimuth))
-        rot_el = Rotation.from_euler('x', np.radians(self.elevation))
-        self.rotation = rot_az * rot_el
+    def get_view_matrix(self):
+        if not self.target_frame:
+            return
+
+        # Get target's world position
+        target_pos, _ = self.target_frame.get_transform()
+
+        # Calculate camera position in spherical coordinates
+        x = self.distance * np.cos(np.radians(self.elevation)) * np.cos(np.radians(self.azimuth))
+        y = self.distance * np.cos(np.radians(self.elevation)) * np.sin(np.radians(self.azimuth))
+        z = self.distance * np.sin(np.radians(self.elevation))
+        
+        # Look at the target from the calculated position
+        glLoadIdentity()
+        gluLookAt(x, y, z,  # Camera position
+                  0, 0, 0,   # Look at target (origin)
+                  0, 0, 1)   # Up vector (Z-up)
+        
+        # Move everything relative to target
+        glTranslatef(-target_pos[0], -target_pos[1], -target_pos[2])
 
     def orbit(self, dx, dy):
-        # Update azimuth and elevation based on mouse movement
+        # dx changes azimuth (rotation in XY plane)
+        # dy changes elevation (up from XY plane)
         self.azimuth += dx * self.mouse_sensitivity * 50
         self.elevation = np.clip(self.elevation + dy * self.mouse_sensitivity * 50, -89, 89)
 
-        # Update camera rotation
-        self.update_rotation()
+    def zoom(self, direction):
+        """Adjust camera distance based on scroll direction"""
+        self.distance = np.clip(
+            self.distance + direction * self.zoom_sensitivity,
+            self.min_distance,
+            self.max_distance
+        )
 
 class GlobeVisualizer:
     def __init__(self):
         # Create frame hierarchy
-        self.root_frame = ReferenceFrame("ECI")  # Inertial frame
-        self.earth_frame = ReferenceFrame("ECEF", self.root_frame)  # Earth-fixed frame
+        self.helio_frame = ReferenceFrame("Heliocentric")  # Sun-centered frame
+        self.earth = Earth(self.helio_frame)  # Earth in helio frame
+        self.root_frame = ReferenceFrame("ECI", self.earth.frame)  # ECI relative to Earth
+        self.earth_frame = ReferenceFrame("ECEF", self.root_frame)  # ECEF relative to ECI
         self.orbit_frame = ReferenceFrame("Orbit", self.earth_frame)  # Satellite orbit frame
 
         # Create objects in their respective frames
-        self.earth = Earth(self.earth_frame)
+        self.sun = Sun(self.helio_frame)
         self.satellite = Satellite(self.orbit_frame)
 
-        # Add coordinate axes (ECI is inertial)
+        # Add coordinate axes
+        self.helio_axes = Axes(self.helio_frame, length=5.0, is_inertial=True)
         self.eci_axes = Axes(self.root_frame, length=1.5, is_inertial=True)
         self.ecef_axes = Axes(self.earth_frame, length=1.5)
         self.orbit_axes = Axes(self.orbit_frame, length=0.5)
-
-        # Add satellite body axes
         self.satellite_axes = Axes(self.satellite.body_frame, length=0.5)
+
+        # Earth's orbital parameters
+        self.earth_orbit_radius = 10.0
+        self.earth_orbit_angle = 0.0
+        self.earth_orbit_speed = 0.01
 
         # Initialize window and camera
         self.width = 800
         self.height = 600
         self.camera = Camera()
+        self.camera.distance = 15.0
         self.mouse_pressed = False
 
         # Track current frame
         self.frame = FrameType.ECI
 
-        # Rotation rate for Earth
+        # Rotation rates
         self.rotation_speed = 0.5
 
         # Add pause state
         self.paused = False
 
-        # Set initial camera target to Earth frame
-        self.camera.set_target(self.earth_frame)
+        # Set initial camera target
+        self.camera.set_target(self.earth_frame)  # Start with Earth view
 
     def init_gl(self):
         glClearColor(0.95, 0.95, 0.95, 1.0)  # Slightly off-white background
@@ -301,52 +341,58 @@ class GlobeVisualizer:
     def display(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-
-        if self.camera.target_frame:
-            # Get target's world position
-            target_pos, _ = self.camera.target_frame.get_transform()
-
-            # Apply camera transform
-            glTranslatef(0.0, 0.0, -self.camera.distance)  # Back away from target
-
-            # Apply camera rotation
-            rot_matrix = self.camera.rotation.as_matrix()
-            gl_matrix = np.eye(4)
-            gl_matrix[:3, :3] = rot_matrix
-            glMultMatrixf(gl_matrix.T.flatten())
-
-            # Move world so target is at origin
-            glTranslatef(-target_pos[0], -target_pos[1], -target_pos[2])
-
-        # Draw all objects in their frames
-        self.root_frame.push_transform()
-
-        # Draw ECI axes
+        
+        # Apply camera view
+        self.camera.get_view_matrix()
+        
+        # Draw Earth's orbital trajectory
+        glLineWidth(1.0)
+        glColor3f(0.5, 0.5, 0.5)  # Grey
+        glBegin(GL_LINE_LOOP)
+        for i in range(100):
+            angle = 2 * np.pi * i / 100
+            x = self.earth_orbit_radius * np.cos(angle)
+            y = self.earth_orbit_radius * np.sin(angle)
+            glVertex3f(x, y, 0)
+        glEnd()
+        
+        # Draw Sun and heliocentric axes
+        self.helio_axes.draw()
+        self.sun.draw()
+        
+        # Draw Earth system
+        self.earth.draw()  # This will push/pop Earth's frame transform
+        
+        # Draw axes and satellite relative to Earth
+        self.earth.frame.push_transform()  # Use Earth's frame instead of root_frame
+        
+        # Draw coordinate axes
         self.eci_axes.draw()
-
-        # Draw Earth and its axes
-        self.earth.draw()
         self.ecef_axes.draw()
-
-        # Draw satellite and its axes
+        
+        # Draw satellite system
         self.satellite.draw()
         self.orbit_axes.draw()
         self.satellite_axes.draw()
-
-        self.root_frame.pop_transform()
-
+        
+        self.earth.frame.pop_transform()
+        
         glutSwapBuffers()
 
     def idle(self):
         if not self.paused:
             if self.frame == FrameType.ECI:
-                # In ECI frame, Earth rotates around Z axis (north-south)
+                # Earth rotates around its axis
                 rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
                 self.earth_frame.rotation = rot * self.earth_frame.rotation
-                print(f"Earth rotation: {self.earth_frame.rotation.as_euler('xyz', degrees=True)}")
 
-            # Always update satellite
+            # Earth orbits the Sun (move the ECI frame)
+            self.earth_orbit_angle += self.earth_orbit_speed
+            x = self.earth_orbit_radius * np.cos(self.earth_orbit_angle)
+            y = self.earth_orbit_radius * np.sin(self.earth_orbit_angle)
+            self.root_frame.position = np.array([x, y, 0.0])
+
+            # Update satellite
             self.satellite.update()
 
         glutPostRedisplay()
@@ -360,14 +406,24 @@ class GlobeVisualizer:
         elif key == b't':  # 't' to cycle camera target
             if self.camera.target_frame == self.earth_frame:
                 self.camera.set_target(self.satellite.body_frame)
+            elif self.camera.target_frame == self.satellite.body_frame:
+                self.camera.set_target(self.helio_frame)
             else:
                 self.camera.set_target(self.earth_frame)
+        elif key == b'i':  # 'i' to zoom in
+            self.camera.zoom(-1)
+            glutPostRedisplay()
+        elif key == b'o':  # 'o' to zoom out
+            self.camera.zoom(1)
+            glutPostRedisplay()
         elif key == b'\x1b':  # ESC key
             glutDestroyWindow(glutGetWindow())
             sys.exit(0)
         glutPostRedisplay()
 
     def mouse(self, button, state, x, y):
+        print(f"Mouse event - button: {button}, state: {state}, x: {x}, y: {y}")
+        
         if button == GLUT_LEFT_BUTTON:
             if state == GLUT_DOWN:
                 self.mouse_pressed = True
@@ -375,6 +431,18 @@ class GlobeVisualizer:
             else:
                 self.mouse_pressed = False
                 self.camera.last_mouse = None
+        elif button == 0 and state == 0:  # Trackpad scroll up
+            self.camera.zoom(-1)
+            glutPostRedisplay()
+        elif button == 1 and state == 0:  # Trackpad scroll down
+            self.camera.zoom(1)
+            glutPostRedisplay()
+        elif button == 3:  # Mouse wheel up
+            self.camera.zoom(-1)
+            glutPostRedisplay()
+        elif button == 4:  # Mouse wheel down
+            self.camera.zoom(1)
+            glutPostRedisplay()
 
     def motion(self, x, y):
         if self.mouse_pressed and self.camera.last_mouse is not None:
@@ -398,7 +466,12 @@ class GlobeVisualizer:
         glutMotionFunc(self.motion)
 
         print("Press 'f' to toggle between ECI and ECEF frames")
+        print("Use 'i' and 'o' to zoom in/out")
         glutMainLoop()
+
+    def passive_motion(self, x, y):
+        print(f"Passive motion: x={x}, y={y}")
+        # We'll add scroll handling here once we see the events
 
     def toggle_frame(self):
         if self.frame == FrameType.ECI:
