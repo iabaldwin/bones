@@ -81,9 +81,23 @@ class Earth(FramedObject):
         self.radius = 1.0
 
     def _draw(self):
+        # Get current transformation matrix to verify rotation
+        matrix = glGetFloatv(GL_MODELVIEW_MATRIX)
+        print(f"Earth transform matrix:\n{matrix}")  # Debug print
+
         glColor3f(0.0, 0.0, 1.0)
-        # Draw at origin of frame
-        glutWireSphere(self.radius, 30, 30)
+        quad = gluNewQuadric()
+        gluQuadricDrawStyle(quad, GLU_LINE)
+        gluQuadricOrientation(quad, GLU_OUTSIDE)  # Ensure proper orientation
+        gluQuadricNormals(quad, GLU_SMOOTH)       # Enable proper normal handling
+        gluSphere(quad, self.radius, 30, 30)
+        gluDeleteQuadric(quad)
+
+    def draw(self):
+        # Override draw to add debug info
+        print(f"Drawing Earth in frame {self.frame.name}")
+        print(f"Frame rotation: {self.frame.rotation.as_euler('xyz', degrees=True)}")
+        super().draw()
 
 class Satellite(FramedObject):
     def __init__(self, frame, orbit_radius=2.0):
@@ -96,7 +110,7 @@ class Satellite(FramedObject):
 
     def _draw(self):
         # Draw orbit trajectory (centered on Earth)
-        glColor3f(0.5, 0.5, 0.5)
+        glColor4f(0.8, 0.8, 0.8, 0.3)  # Light grey with transparency
         glBegin(GL_LINE_LOOP)
         for i in range(100):
             angle = 2 * np.pi * i / 100
@@ -232,7 +246,7 @@ class Camera:
         self.min_distance = 5.0  # Minimum zoom
         self.max_distance = 30.0  # Maximum zoom
         self.azimuth = 0.0   # Angle in XY plane
-        self.elevation = 0.0  # Angle from XY plane
+        self.elevation = 15.0  # Start with 15-degree elevation (changed from 0.0)
         self.rotation = Rotation.from_euler('xyz', [0, 0, 0])
         # For mouse control
         self.last_mouse = None
@@ -380,7 +394,7 @@ class GlobeVisualizer:
 
         # Create objects and add them to drawables list
         self.sun = Sun(self.helio_frame)
-        self.earth = Earth(self.eci_frame)
+        self.earth = Earth(self.ecef_frame)
         self.satellite = Satellite(self.orbit_frame)
 
         # Add coordinate axes
@@ -453,7 +467,7 @@ class GlobeVisualizer:
 
         # Draw Earth's orbital trajectory
         glLineWidth(1.0)
-        glColor3f(0.5, 0.5, 0.5)  # Grey
+        glColor4f(0.8, 0.8, 0.8, 0.3)  # Light grey with transparency
         glBegin(GL_LINE_LOOP)
         for i in range(100):
             angle = 2 * np.pi * i / 100
@@ -471,9 +485,11 @@ class GlobeVisualizer:
     def idle(self):
         if not self.paused:
             if self.frame == FrameType.ECI:
-                # Earth rotates around its axis
+                # Earth rotates around its axis (increase speed for visibility)
+                self.rotation_speed = 2.0  # Increased from 0.5
                 rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
-                self.ecef_frame.rotation = rot * self.ecef_frame.rotation
+                self.ecef_frame.rotation = self.ecef_frame.rotation * rot
+                print(f"Rotating ECEF frame, speed: {self.rotation_speed}")  # Debug print
 
             # Earth orbits the Sun (move the ECI frame)
             self.earth_orbit_angle += self.earth_orbit_speed
