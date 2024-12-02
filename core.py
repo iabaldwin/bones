@@ -327,10 +327,7 @@ class LocalLevelFrame(FramedObject):
         z = self.earth_radius * np.sin(self.latitude)
         self.frame.position = np.array([x, y, z])
 
-        # Rotation sequence for ENU orientation:
-        # 1. First rotate around Z by longitude to align with meridian
-        # 2. Then rotate around Y by (90° - latitude) to align with local tangent
-        # 3. Finally rotate by 90° around Z to get X=East, Y=North
+        # Rotation sequence for ENU orientation
         R_z1 = Rotation.from_euler('z', self.longitude)
         R_y = Rotation.from_euler('y', np.pi/2 - self.latitude)
         R_z2 = Rotation.from_euler('z', np.pi/2)
@@ -338,30 +335,32 @@ class LocalLevelFrame(FramedObject):
         # Combine rotations in correct order
         self.frame.rotation = R_z1 * R_y * R_z2
 
+        # Draw axes directly in _draw method instead of using Axes object
+        self.axis_length = 0.2
+
     def _draw(self):
-        # Draw axes (now properly aligned with ENU)
+        # Draw coordinate axes
         glLineWidth(1.0)
-        length = 0.2
 
         # X axis - Red (East)
         glBegin(GL_LINES)
         glColor3f(1.0, 0.0, 0.0)
         glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(length, 0.0, 0.0)
+        glVertex3f(self.axis_length, 0.0, 0.0)
         glEnd()
 
         # Y axis - Green (North)
         glBegin(GL_LINES)
         glColor3f(0.0, 1.0, 0.0)
         glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, length, 0.0)
+        glVertex3f(0.0, self.axis_length, 0.0)
         glEnd()
 
         # Z axis - Blue (Up)
         glBegin(GL_LINES)
         glColor3f(0.0, 0.0, 1.0)
         glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, 0.0, length)
+        glVertex3f(0.0, 0.0, self.axis_length)
         glEnd()
 
         # Draw a red square in the tangent plane (East-North plane)
@@ -417,7 +416,7 @@ class GlobeVisualizer:
             self.satellite,
             self.orbit_axes,
             self.satellite_axes,
-            self.llf  # Add the local level frame
+            self.llf
         ])
 
         # Earth's orbital parameters (now applied to ECI frame)
