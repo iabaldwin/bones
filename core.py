@@ -283,24 +283,25 @@ class Camera:
 class GlobeVisualizer:
     def __init__(self):
         # Create frame hierarchy
-        self.helio_frame = ReferenceFrame("Heliocentric")  # Sun-centered frame
-        self.earth = Earth(self.helio_frame)  # Earth in helio frame
-        self.root_frame = ReferenceFrame("ECI", self.earth.frame)  # ECI relative to Earth
-        self.earth_frame = ReferenceFrame("ECEF", self.root_frame)  # ECEF relative to ECI
-        self.orbit_frame = ReferenceFrame("Orbit", self.earth_frame)  # Satellite orbit frame
+        self.root_frame = ReferenceFrame("Root")  # Global fixed frame
+        self.helio_frame = ReferenceFrame("Heliocentric", self.root_frame)  # Sun-centered frame
+        self.eci_frame = ReferenceFrame("ECI", self.helio_frame)  # ECI relative to helio
+        self.ecef_frame = ReferenceFrame("ECEF", self.eci_frame)  # ECEF relative to ECI
+        self.orbit_frame = ReferenceFrame("Orbit", self.ecef_frame)  # Satellite orbit frame
 
         # Create objects in their respective frames
         self.sun = Sun(self.helio_frame)
+        self.earth = Earth(self.eci_frame)  # Earth in ECI frame
         self.satellite = Satellite(self.orbit_frame)
 
         # Add coordinate axes
         self.helio_axes = Axes(self.helio_frame, length=5.0, is_inertial=True)
-        self.eci_axes = Axes(self.root_frame, length=1.5, is_inertial=True)
-        self.ecef_axes = Axes(self.earth_frame, length=1.5)
+        self.eci_axes = Axes(self.eci_frame, length=1.5, is_inertial=True)
+        self.ecef_axes = Axes(self.ecef_frame, length=1.5)
         self.orbit_axes = Axes(self.orbit_frame, length=0.5)
         self.satellite_axes = Axes(self.satellite.body_frame, length=0.5)
 
-        # Earth's orbital parameters
+        # Earth's orbital parameters (now applied to ECI frame)
         self.earth_orbit_radius = 10.0
         self.earth_orbit_angle = 0.0
         self.earth_orbit_speed = 0.01
@@ -322,7 +323,7 @@ class GlobeVisualizer:
         self.paused = False
 
         # Set initial camera target
-        self.camera.set_target(self.earth_frame)  # Start with Earth view
+        self.camera.set_target(self.eci_frame)  # Start with Earth view
 
     def init_gl(self):
         glClearColor(0.95, 0.95, 0.95, 1.0)  # Slightly off-white background
@@ -361,12 +362,9 @@ class GlobeVisualizer:
         self.sun.draw()
         
         # Draw Earth system
-        self.earth.draw()  # This will push/pop Earth's frame transform
+        self.earth.draw()
         
-        # Draw axes and satellite relative to Earth
-        self.earth.frame.push_transform()  # Use Earth's frame instead of root_frame
-        
-        # Draw coordinate axes
+        # Remove the extra frame transform - the axes already have the correct frame
         self.eci_axes.draw()
         self.ecef_axes.draw()
         
@@ -375,8 +373,6 @@ class GlobeVisualizer:
         self.orbit_axes.draw()
         self.satellite_axes.draw()
         
-        self.earth.frame.pop_transform()
-        
         glutSwapBuffers()
 
     def idle(self):
@@ -384,13 +380,13 @@ class GlobeVisualizer:
             if self.frame == FrameType.ECI:
                 # Earth rotates around its axis
                 rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
-                self.earth_frame.rotation = rot * self.earth_frame.rotation
+                self.ecef_frame.rotation = rot * self.ecef_frame.rotation
 
             # Earth orbits the Sun (move the ECI frame)
             self.earth_orbit_angle += self.earth_orbit_speed
             x = self.earth_orbit_radius * np.cos(self.earth_orbit_angle)
             y = self.earth_orbit_radius * np.sin(self.earth_orbit_angle)
-            self.root_frame.position = np.array([x, y, 0.0])
+            self.eci_frame.position = np.array([x, y, 0.0])
 
             # Update satellite
             self.satellite.update()
@@ -404,12 +400,12 @@ class GlobeVisualizer:
             self.paused = not self.paused
             print("Simulation " + ("paused" if self.paused else "resumed"))
         elif key == b't':  # 't' to cycle camera target
-            if self.camera.target_frame == self.earth_frame:
+            if self.camera.target_frame == self.eci_frame:
                 self.camera.set_target(self.satellite.body_frame)
             elif self.camera.target_frame == self.satellite.body_frame:
                 self.camera.set_target(self.helio_frame)
             else:
-                self.camera.set_target(self.earth_frame)
+                self.camera.set_target(self.eci_frame)
         elif key == b'i':  # 'i' to zoom in
             self.camera.zoom(-1)
             glutPostRedisplay()
