@@ -2,6 +2,8 @@
 
 A Python-based OpenGL visualization tool that demonstrates various reference frames and orbital mechanics, including Earth's rotation, satellite orbits, and coordinate transformations.
 
+![Globe Visualization](media/bones.png)
+
 ## Features
 
 - Multiple reference frame visualizations:
