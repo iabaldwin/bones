@@ -81,23 +81,13 @@ class Earth(FramedObject):
         self.radius = 1.0
 
     def _draw(self):
-        # Get current transformation matrix to verify rotation
-        matrix = glGetFloatv(GL_MODELVIEW_MATRIX)
-        print(f"Earth transform matrix:\n{matrix}")  # Debug print
-
-        glColor3f(0.0, 0.0, 1.0)
+        glColor4f(0.0, 0.0, 1.0, 0.6)  # Blue with transparency
         quad = gluNewQuadric()
         gluQuadricDrawStyle(quad, GLU_LINE)
-        gluQuadricOrientation(quad, GLU_OUTSIDE)  # Ensure proper orientation
-        gluQuadricNormals(quad, GLU_SMOOTH)       # Enable proper normal handling
+        gluQuadricOrientation(quad, GLU_OUTSIDE)
+        gluQuadricNormals(quad, GLU_SMOOTH)
         gluSphere(quad, self.radius, 30, 30)
         gluDeleteQuadric(quad)
-
-    def draw(self):
-        # Override draw to add debug info
-        print(f"Drawing Earth in frame {self.frame.name}")
-        print(f"Frame rotation: {self.frame.rotation.as_euler('xyz', degrees=True)}")
-        super().draw()
 
 class Satellite(FramedObject):
     def __init__(self, frame, orbit_radius=2.0):
@@ -486,10 +476,9 @@ class GlobeVisualizer:
         if not self.paused:
             if self.frame == FrameType.ECI:
                 # Earth rotates around its axis (increase speed for visibility)
-                self.rotation_speed = 2.0  # Increased from 0.5
+                self.rotation_speed = 2.0
                 rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
                 self.ecef_frame.rotation = self.ecef_frame.rotation * rot
-                print(f"Rotating ECEF frame, speed: {self.rotation_speed}")  # Debug print
 
             # Earth orbits the Sun (move the ECI frame)
             self.earth_orbit_angle += self.earth_orbit_speed
