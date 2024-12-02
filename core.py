@@ -66,7 +66,7 @@ class ReferenceFrame:
         if self.parent:
             parent_pos, _ = self.parent.get_transform()
             current_pos, _ = self.get_transform()
-            
+
             # Draw vector from parent to current frame
             glLineWidth(1.0)
             glColor4f(0.5, 0.5, 0.5, 0.7)  # Grey, slightly transparent
@@ -310,89 +310,75 @@ class Camera:
 
 class LocalLevelFrame(FramedObject):
     def __init__(self, frame, latitude, longitude, size=0.2):
-        super().__init__(frame)
-        self.latitude = np.radians(latitude)   # Convert to radians
+        # Create the frame first
+        self.llf_frame = ReferenceFrame("Local Level Frame", parent=frame)
+
+        # Initialize FramedObject with our LLF frame
+        super().__init__(self.llf_frame)
+
+        self.latitude = np.radians(latitude)
         self.longitude = np.radians(longitude)
         self.size = size
-        self.earth_radius = 1.0  # Match Earth's radius from Earth class
-
-        # Create a frame for the LLF
-        self.llf_frame = ReferenceFrame("Local Level Frame", parent=frame)
+        self.earth_radius = 1.0
 
         # Calculate position on Earth's surface
         x = self.earth_radius * np.cos(self.latitude) * np.cos(self.longitude)
         y = self.earth_radius * np.cos(self.latitude) * np.sin(self.longitude)
         z = self.earth_radius * np.sin(self.latitude)
-        self.llf_frame.position = np.array([x, y, z])
+        self.frame.position = np.array([x, y, z])
 
-        # Create rotation matrices for ENU transformation
-        R_x = np.array([
-            [1, 0, 0],
-            [0, math.cos(self.latitude), -math.sin(self.latitude)],
-            [0, math.sin(self.latitude), math.cos(self.latitude)]
-        ])
+        # Rotation sequence for ENU orientation:
+        # 1. First rotate around Z by longitude to align with meridian
+        # 2. Then rotate around Y by (90° - latitude) to align with local tangent
+        # 3. Finally rotate by 90° around Z to get X=East, Y=North
+        R_z1 = Rotation.from_euler('z', self.longitude)
+        R_y = Rotation.from_euler('y', np.pi/2 - self.latitude)
+        R_z2 = Rotation.from_euler('z', np.pi/2)
 
-        R_z = np.array([
-            [math.cos(self.longitude), -math.sin(self.longitude), 0],
-            [math.sin(self.longitude), math.cos(self.longitude), 0],
-            [0, 0, 1]
-        ])
-
-        # Combined rotation
-        rotation_matrix = np.dot(R_x, R_z)
-        self.llf_frame.rotation = Rotation.from_matrix(rotation_matrix)
+        # Combine rotations in correct order
+        self.frame.rotation = R_z1 * R_y * R_z2
 
     def _draw(self):
-        glLineWidth(2.0)  # Make lines more visible
+        # Draw axes (now properly aligned with ENU)
+        glLineWidth(1.0)
+        length = 0.2
 
-        # Draw debug vector from origin to LLF position
-        glColor3f(1.0, 0.0, 0.0)  # Red
+        # X axis - Red (East)
         glBegin(GL_LINES)
-        glVertex3f(0.0, 0.0, 0.0)  # Origin of ECEF frame
-        glVertex3f(*self.llf_frame.position)   # Position of LLF frame
+        glColor3f(1.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(length, 0.0, 0.0)
         glEnd()
 
-        # Save current matrix
-        glPushMatrix()
+        # Y axis - Green (North)
+        glBegin(GL_LINES)
+        glColor3f(0.0, 1.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, length, 0.0)
+        glEnd()
 
-        # Move to the point on Earth's surface
-        glTranslatef(*self.llf_frame.position)
+        # Z axis - Blue (Up)
+        glBegin(GL_LINES)
+        glColor3f(0.0, 0.0, 1.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, length)
+        glEnd()
 
-        # Calculate the rotation needed to align with the tangent plane
-        # The normal to the tangent plane is the normalized position vector
-        normal = self.llf_frame.position / np.linalg.norm(self.llf_frame.position)
-
-        # Create a rotation matrix that aligns the z-axis with this normal
-        # First, find a perpendicular vector for the x-axis
-        x_axis = np.cross(np.array([0, 0, 1]), normal)
-        if np.linalg.norm(x_axis) < 1e-10:
-            x_axis = np.array([1, 0, 0])
-        x_axis = x_axis / np.linalg.norm(x_axis)
-
-        # Complete the right-handed system
-        y_axis = np.cross(normal, x_axis)
-        y_axis = y_axis / np.linalg.norm(y_axis)
-
-        # Create and apply the rotation matrix
-        rot_matrix = np.vstack([x_axis, y_axis, normal]).T
-        glMultMatrixf(np.vstack([np.hstack([rot_matrix, np.zeros((3,1))]),
-                               [0, 0, 0, 1]]).T.flatten())
-
-        # Draw a red square in the tangent plane
+        # Draw a red square in the tangent plane (East-North plane)
         glColor3f(1.0, 0.0, 0.0)  # Red
         glBegin(GL_LINE_LOOP)
-        glVertex3f(-self.size, -self.size, 0)
-        glVertex3f(self.size, -self.size, 0)
-        glVertex3f(self.size, self.size, 0)
-        glVertex3f(-self.size, self.size, 0)
+        s = self.size / 2
+        glVertex3f(-s, -s, 0)
+        glVertex3f(s, -s, 0)
+        glVertex3f(s, s, 0)
+        glVertex3f(-s, s, 0)
         glEnd()
 
-        # Restore matrix
-        glPopMatrix()
-
-        # Draw small axes
-        axes = Axes(self.llf_frame, length=self.size*2)
-        axes.draw()
+        # Draw a point at the origin
+        glPointSize(5.0)
+        glBegin(GL_POINTS)
+        glVertex3f(0, 0, 0)
+        glEnd()
 
 class GlobeVisualizer:
     def __init__(self):
