@@ -256,13 +256,13 @@ class Camera:
         x = self.distance * np.cos(np.radians(self.elevation)) * np.cos(np.radians(self.azimuth))
         y = self.distance * np.cos(np.radians(self.elevation)) * np.sin(np.radians(self.azimuth))
         z = self.distance * np.sin(np.radians(self.elevation))
-        
+
         # Look at the target from the calculated position
         glLoadIdentity()
         gluLookAt(x, y, z,  # Camera position
                   0, 0, 0,   # Look at target (origin)
                   0, 0, 1)   # Up vector (Z-up)
-        
+
         # Move everything relative to target
         glTranslatef(-target_pos[0], -target_pos[1], -target_pos[2])
 
@@ -280,6 +280,92 @@ class Camera:
             self.max_distance
         )
 
+class LocalLevelFrame(FramedObject):
+    def __init__(self, frame, latitude, longitude, size=0.2):
+        super().__init__(frame)
+        self.latitude = np.radians(latitude)   # Convert to radians
+        self.longitude = np.radians(longitude)
+        self.size = size
+        self.earth_radius = 1.0  # Match Earth's radius from Earth class
+
+        # Create a frame for the LLF
+        self.llf_frame = ReferenceFrame("Local Level Frame", parent=frame)
+
+        # Calculate position on Earth's surface
+        x = self.earth_radius * np.cos(self.latitude) * np.cos(self.longitude)
+        y = self.earth_radius * np.cos(self.latitude) * np.sin(self.longitude)
+        z = self.earth_radius * np.sin(self.latitude)
+        self.llf_frame.position = np.array([x, y, z])
+
+        # Create rotation matrices for ENU transformation
+        R_x = np.array([
+            [1, 0, 0],
+            [0, math.cos(self.latitude), -math.sin(self.latitude)],
+            [0, math.sin(self.latitude), math.cos(self.latitude)]
+        ])
+
+        R_z = np.array([
+            [math.cos(self.longitude), -math.sin(self.longitude), 0],
+            [math.sin(self.longitude), math.cos(self.longitude), 0],
+            [0, 0, 1]
+        ])
+
+        # Combined rotation
+        rotation_matrix = np.dot(R_x, R_z)
+        self.llf_frame.rotation = Rotation.from_matrix(rotation_matrix)
+
+    def _draw(self):
+        glLineWidth(2.0)  # Make lines more visible
+
+        # Draw debug vector from origin to LLF position
+        glColor3f(1.0, 0.0, 0.0)  # Red
+        glBegin(GL_LINES)
+        glVertex3f(0.0, 0.0, 0.0)  # Origin of ECEF frame
+        glVertex3f(*self.llf_frame.position)   # Position of LLF frame
+        glEnd()
+
+        # Save current matrix
+        glPushMatrix()
+
+        # Move to the point on Earth's surface
+        glTranslatef(*self.llf_frame.position)
+
+        # Calculate the rotation needed to align with the tangent plane
+        # The normal to the tangent plane is the normalized position vector
+        normal = self.llf_frame.position / np.linalg.norm(self.llf_frame.position)
+
+        # Create a rotation matrix that aligns the z-axis with this normal
+        # First, find a perpendicular vector for the x-axis
+        x_axis = np.cross(np.array([0, 0, 1]), normal)
+        if np.linalg.norm(x_axis) < 1e-10:
+            x_axis = np.array([1, 0, 0])
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        # Complete the right-handed system
+        y_axis = np.cross(normal, x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+
+        # Create and apply the rotation matrix
+        rot_matrix = np.vstack([x_axis, y_axis, normal]).T
+        glMultMatrixf(np.vstack([np.hstack([rot_matrix, np.zeros((3,1))]),
+                               [0, 0, 0, 1]]).T.flatten())
+
+        # Draw a red square in the tangent plane
+        glColor3f(1.0, 0.0, 0.0)  # Red
+        glBegin(GL_LINE_LOOP)
+        glVertex3f(-self.size, -self.size, 0)
+        glVertex3f(self.size, -self.size, 0)
+        glVertex3f(self.size, self.size, 0)
+        glVertex3f(-self.size, self.size, 0)
+        glEnd()
+
+        # Restore matrix
+        glPopMatrix()
+
+        # Draw small axes
+        axes = Axes(self.llf_frame, length=self.size*2)
+        axes.draw()
+
 class GlobeVisualizer:
     def __init__(self):
         # Create frame hierarchy
@@ -289,9 +375,12 @@ class GlobeVisualizer:
         self.ecef_frame = ReferenceFrame("ECEF", self.eci_frame)  # ECEF relative to ECI
         self.orbit_frame = ReferenceFrame("Orbit", self.ecef_frame)  # Satellite orbit frame
 
-        # Create objects in their respective frames
+        # Create a list to store all drawable objects
+        self.drawables = []
+
+        # Create objects and add them to drawables list
         self.sun = Sun(self.helio_frame)
-        self.earth = Earth(self.eci_frame)  # Earth in ECI frame
+        self.earth = Earth(self.eci_frame)
         self.satellite = Satellite(self.orbit_frame)
 
         # Add coordinate axes
@@ -300,6 +389,22 @@ class GlobeVisualizer:
         self.ecef_axes = Axes(self.ecef_frame, length=1.5)
         self.orbit_axes = Axes(self.orbit_frame, length=0.5)
         self.satellite_axes = Axes(self.satellite.body_frame, length=0.5)
+
+        # Add a local level frame at a specific location (e.g., 45°N, 45°E)
+        self.llf = LocalLevelFrame(self.ecef_frame, latitude=45, longitude=45)
+
+        # Add to drawables list
+        self.drawables.extend([
+            self.helio_axes,
+            self.sun,
+            self.earth,
+            self.eci_axes,
+            self.ecef_axes,
+            self.satellite,
+            self.orbit_axes,
+            self.satellite_axes,
+            self.llf  # Add the local level frame
+        ])
 
         # Earth's orbital parameters (now applied to ECI frame)
         self.earth_orbit_radius = 10.0
@@ -342,10 +447,10 @@ class GlobeVisualizer:
     def display(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glMatrixMode(GL_MODELVIEW)
-        
+
         # Apply camera view
         self.camera.get_view_matrix()
-        
+
         # Draw Earth's orbital trajectory
         glLineWidth(1.0)
         glColor3f(0.5, 0.5, 0.5)  # Grey
@@ -356,23 +461,11 @@ class GlobeVisualizer:
             y = self.earth_orbit_radius * np.sin(angle)
             glVertex3f(x, y, 0)
         glEnd()
-        
-        # Draw Sun and heliocentric axes
-        self.helio_axes.draw()
-        self.sun.draw()
-        
-        # Draw Earth system
-        self.earth.draw()
-        
-        # Remove the extra frame transform - the axes already have the correct frame
-        self.eci_axes.draw()
-        self.ecef_axes.draw()
-        
-        # Draw satellite system
-        self.satellite.draw()
-        self.orbit_axes.draw()
-        self.satellite_axes.draw()
-        
+
+        # Draw all objects
+        for drawable in self.drawables:
+            drawable.draw()
+
         glutSwapBuffers()
 
     def idle(self):
@@ -418,8 +511,6 @@ class GlobeVisualizer:
         glutPostRedisplay()
 
     def mouse(self, button, state, x, y):
-        print(f"Mouse event - button: {button}, state: {state}, x: {x}, y: {y}")
-        
         if button == GLUT_LEFT_BUTTON:
             if state == GLUT_DOWN:
                 self.mouse_pressed = True
