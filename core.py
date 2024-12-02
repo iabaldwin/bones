@@ -311,7 +311,7 @@ class Camera:
 class LocalLevelFrame(FramedObject):
     def __init__(self, frame, latitude, longitude, size=0.2):
         # Create the frame first
-        self.llf_frame = ReferenceFrame("Local Level Frame", parent=frame)
+        self.llf_frame = ReferenceFrame("ENU Frame", parent=frame)
 
         # Initialize FramedObject with our LLF frame
         super().__init__(self.llf_frame)
