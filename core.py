@@ -61,6 +61,30 @@ class ReferenceFrame:
         """Pop this frame's transform from OpenGL matrix stack"""
         glPopMatrix()
 
+    def draw_transform_hierarchy(self):
+        """Draw vectors showing the transform hierarchy"""
+        if self.parent:
+            parent_pos, _ = self.parent.get_transform()
+            current_pos, _ = self.get_transform()
+            
+            # Draw vector from parent to current frame
+            glLineWidth(1.0)
+            glColor4f(0.5, 0.5, 0.5, 0.7)  # Grey, slightly transparent
+            glBegin(GL_LINES)
+            glVertex3f(*parent_pos)
+            glVertex3f(*current_pos)
+            glEnd()
+
+            # Draw text label at midpoint
+            mid_point = (parent_pos + current_pos) / 2
+            glRasterPos3f(*mid_point)
+            for c in self.name:
+                glutBitmapCharacter(GLUT_BITMAP_8_BY_13, ord(c))
+
+        # Recursively draw children's transform vectors
+        for child in self.children:
+            child.draw_transform_hierarchy()
+
 class FramedObject:
     """Base class for objects that exist in a reference frame"""
     def __init__(self, frame):
@@ -454,6 +478,9 @@ class GlobeVisualizer:
 
         # Apply camera view
         self.camera.get_view_matrix()
+
+        # Draw transform hierarchy first (so it's behind other elements)
+        self.root_frame.draw_transform_hierarchy()
 
         # Draw Earth's orbital trajectory
         glLineWidth(1.0)
