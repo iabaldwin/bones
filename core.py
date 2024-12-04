@@ -15,11 +15,19 @@ class FrameType(Enum):
 
 class ReferenceFrame:
     def __init__(self, name, parent=None):
+        """Initialize a reference frame.
+
+        Naming convention: T_A_B represents transformation from frame A to frame B
+        where A is the parent frame and B is the current frame.
+        """
         self.name = name
         self.parent = parent
         self.children = []
-        self.rotation = Rotation.from_euler('xyz', [0, 0, 0])
-        self.position = np.zeros(3)
+        # T_parent_self represents the transformation from parent frame to this frame
+        self.T_parent_self = {
+            'rotation': Rotation.from_euler('xyz', [0, 0, 0]),
+            'position': np.zeros(3)
+        }
 
         if parent:
             parent.add_child(self)
@@ -29,18 +37,18 @@ class ReferenceFrame:
         child.parent = self
 
     def get_transform(self):
-        """Get the complete transform from this frame to root"""
+        """Get the complete transform from root to this frame (T_root_self)"""
         # Start with this frame's transform
-        position = self.position.copy()
-        rotation = self.rotation
+        position = self.T_parent_self['position'].copy()
+        rotation = self.T_parent_self['rotation']
 
         # Walk up the tree to accumulate transforms
         current = self.parent
         while current is not None:
             # Transform position by parent's rotation and add parent's position
-            position = current.rotation.apply(position) + current.position
+            position = current.T_parent_self['rotation'].apply(position) + current.T_parent_self['position']
             # Compose rotations
-            rotation = current.rotation * rotation
+            rotation = current.T_parent_self['rotation'] * rotation
             current = current.parent
 
         return position, rotation
@@ -147,7 +155,7 @@ class Satellite(FramedObject):
         # Update body frame position to follow satellite
         x = self.orbit_radius * np.cos(self.orbit_angle)
         y = self.orbit_radius * np.sin(self.orbit_angle)
-        self.body_frame.position = np.array([x, y, 0.0])
+        self.body_frame.T_parent_self['position'] = np.array([x, y, 0.0])
 
 class Axes(FramedObject):
     def __init__(self, frame, length=1.0, is_inertial=False):
@@ -325,7 +333,7 @@ class LocalLevelFrame(FramedObject):
         x = self.earth_radius * np.cos(self.latitude) * np.cos(self.longitude)
         y = self.earth_radius * np.cos(self.latitude) * np.sin(self.longitude)
         z = self.earth_radius * np.sin(self.latitude)
-        self.frame.position = np.array([x, y, z])
+        self.frame.T_parent_self['position'] = np.array([x, y, z])
 
         # Rotation sequence for ENU orientation
         R_z1 = Rotation.from_euler('z', self.longitude)
@@ -333,7 +341,7 @@ class LocalLevelFrame(FramedObject):
         R_z2 = Rotation.from_euler('z', np.pi/2)
 
         # Combine rotations in correct order
-        self.frame.rotation = R_z1 * R_y * R_z2
+        self.frame.T_parent_self['rotation'] = R_z1 * R_y * R_z2
 
         # Draw axes directly in _draw method instead of using Axes object
         self.axis_length = 0.2
@@ -490,13 +498,13 @@ class GlobeVisualizer:
                 # Earth rotates around its axis (increase speed for visibility)
                 self.rotation_speed = 2.0
                 rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
-                self.ecef_frame.rotation = self.ecef_frame.rotation * rot
+                self.ecef_frame.T_parent_self['rotation'] = self.ecef_frame.T_parent_self['rotation'] * rot
 
             # Earth orbits the Sun (move the ECI frame)
             self.earth_orbit_angle += self.earth_orbit_speed
             x = self.earth_orbit_radius * np.cos(self.earth_orbit_angle)
             y = self.earth_orbit_radius * np.sin(self.earth_orbit_angle)
-            self.eci_frame.position = np.array([x, y, 0.0])
+            self.eci_frame.T_parent_self['position'] = np.array([x, y, 0.0])
 
             # Update satellite
             self.satellite.update()
