@@ -566,11 +566,14 @@ class GlobeVisualizer:
 
     def idle(self):
         if not self.paused:
-            if self.frame == FrameType.ECI:
-                # Earth rotates around its axis (increase speed for visibility)
-                self.rotation_speed = 2.0
-                rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
-                self.ecef_frame.T_parent_self['rotation'] = self.ecef_frame.T_parent_self['rotation'] * rot
+            # Earth always rotates around its axis at constant speed
+            self.rotation_speed = 2.0
+            rot = Rotation.from_euler('z', np.radians(self.rotation_speed))
+            self.ecef_frame.T_parent_self['rotation'] = self.ecef_frame.T_parent_self['rotation'] * rot
+
+            # When in ECEF mode, rotate the camera to match Earth's rotation
+            if self.frame == FrameType.ECEF:
+                self.camera.azimuth += self.rotation_speed
 
             # Earth orbits the Sun (move the ECI frame)
             self.earth_orbit_angle += self.earth_orbit_speed
