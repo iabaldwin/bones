@@ -111,9 +111,17 @@ class Earth(FramedObject):
     def __init__(self, frame):
         super().__init__(frame)
         self.radius = 1.0
+        self.transparency = 0.6  # Default transparency
 
     def _draw(self):
-        glColor4f(0.0, 0.0, 1.0, 0.6)  # Blue with transparency
+        # Get the current camera target from the visualizer
+        visualizer = self.frame.visualizer  # We'll need to add this reference
+        is_enu_view = (visualizer.camera.target_frame == visualizer.llf.llf_frame)
+
+        # Adjust transparency based on view
+        alpha = 0.25 if is_enu_view else 0.6  # 75% transparent when ENU frame is target
+
+        glColor4f(0.0, 0.0, 1.0, alpha)  # Blue with variable transparency
         quad = gluNewQuadric()
         gluQuadricDrawStyle(quad, GLU_LINE)
         gluQuadricOrientation(quad, GLU_OUTSIDE)
@@ -265,7 +273,7 @@ class Sun(FramedObject):
 class Camera:
     def __init__(self):
         self.distance = 15.0  # Distance from target
-        self.min_distance = 5.0  # Minimum zoom
+        self.min_distance = 1.0  # Changed from 5.0 to allow closer zooming
         self.max_distance = 30.0  # Maximum zoom
         self.azimuth = 0.0   # Angle in XY plane
         self.elevation = 15.0  # Start with 15-degree elevation (changed from 0.0)
@@ -276,31 +284,40 @@ class Camera:
         self.zoom_sensitivity = 0.5
         # For target tracking
         self.target_frame = None
+        self.target_up_vector = np.array([0, 0, 1])  # Default Z-up
 
-    def set_target(self, frame):
+    def set_target(self, frame, up_vector=None):
         self.target_frame = frame
+        if up_vector is not None:
+            self.target_up_vector = up_vector
         print(f"Camera now targeting {frame.name}")
 
     def get_view_matrix(self):
         if not self.target_frame:
             return
 
-        # Get target's world position
-        target_pos, _ = self.target_frame.get_transform()
+        # Get target's world position and rotation
+        target_pos, target_rot = self.target_frame.get_transform()
 
-        # Calculate camera position in spherical coordinates
+        # Calculate camera position in spherical coordinates relative to target
         x = self.distance * np.cos(np.radians(self.elevation)) * np.cos(np.radians(self.azimuth))
         y = self.distance * np.cos(np.radians(self.elevation)) * np.sin(np.radians(self.azimuth))
         z = self.distance * np.sin(np.radians(self.elevation))
+        camera_pos_local = np.array([x, y, z])
+
+        # Transform camera position to world coordinates
+        camera_pos = target_rot.apply(camera_pos_local) + target_pos
+
+        # Transform up vector
+        up = target_rot.apply(self.target_up_vector)
 
         # Look at the target from the calculated position
         glLoadIdentity()
-        gluLookAt(x, y, z,  # Camera position
-                  0, 0, 0,   # Look at target (origin)
-                  0, 0, 1)   # Up vector (Z-up)
-
-        # Move everything relative to target
-        glTranslatef(-target_pos[0], -target_pos[1], -target_pos[2])
+        gluLookAt(
+            camera_pos[0], camera_pos[1], camera_pos[2],  # Camera position
+            target_pos[0], target_pos[1], target_pos[2],  # Look at target
+            up[0], up[1], up[2]  # Up vector
+        )
 
     def orbit(self, dx, dy):
         # dx changes azimuth (rotation in XY plane)
@@ -387,6 +404,56 @@ class LocalLevelFrame(FramedObject):
         glVertex3f(0, 0, 0)
         glEnd()
 
+class Robot(FramedObject):
+    def __init__(self, frame, size=0.05):
+        # Create a frame for the robot
+        self.robot_frame = ReferenceFrame("Robot", parent=frame)
+        super().__init__(self.robot_frame)
+
+        self.size = size
+        self.t = 0  # Parameter for lemniscate curve
+        self.speed = 0.02  # Speed of movement
+        self.scale = 0.1   # Scale of the lemniscate
+
+    def _draw(self):
+        # Draw robot as a small box with a direction indicator
+        glColor3f(1.0, 0.5, 0.0)  # Orange
+
+        # Draw main body (box)
+        glBegin(GL_LINE_LOOP)
+        glVertex3f(-self.size, -self.size, 0)
+        glVertex3f(self.size, -self.size, 0)
+        glVertex3f(self.size, self.size, 0)
+        glVertex3f(-self.size, self.size, 0)
+        glEnd()
+
+        # Draw direction indicator (front of robot)
+        glBegin(GL_LINES)
+        glVertex3f(0, 0, 0)
+        glVertex3f(self.size * 2, 0, 0)
+        glEnd()
+
+    def update(self):
+        # Lemniscate curve parameters
+        a = self.scale
+        t = self.t
+
+        # Calculate position on lemniscate
+        x = (a * np.cos(t)) / (1 + np.sin(t)**2)
+        y = (a * np.cos(t) * np.sin(t)) / (1 + np.sin(t)**2)
+
+        # Calculate heading (tangent to curve)
+        dx = -a * (np.sin(t) * (1 + np.sin(t)**2) + 2 * np.cos(t)**2 * np.sin(t)) / (1 + np.sin(t)**2)**2
+        dy = a * (np.cos(t) * (1 + np.sin(t)**2) - 2 * np.cos(t) * np.sin(t)**2) / (1 + np.sin(t)**2)**2
+        heading = np.arctan2(dy, dx)
+
+        # Update robot's position and orientation
+        self.robot_frame.T_parent_self['position'] = np.array([x, y, 0.0])
+        self.robot_frame.T_parent_self['rotation'] = Rotation.from_euler('z', heading)
+
+        # Increment time parameter
+        self.t += self.speed
+
 class GlobeVisualizer:
     def __init__(self):
         # Create frame hierarchy
@@ -402,6 +469,7 @@ class GlobeVisualizer:
         # Create objects and add them to drawables list
         self.sun = Sun(self.helio_frame)
         self.earth = Earth(self.ecef_frame)
+        self.earth.frame.visualizer = self  # Add reference to visualizer
         self.satellite = Satellite(self.orbit_frame)
 
         # Add coordinate axes
@@ -414,6 +482,9 @@ class GlobeVisualizer:
         # Add a local level frame at a specific location (e.g., 45°N, 45°E)
         self.llf = LocalLevelFrame(self.ecef_frame, latitude=45, longitude=45)
 
+        # Add robot to the ENU frame
+        self.robot = Robot(self.llf.llf_frame)
+
         # Add to drawables list
         self.drawables.extend([
             self.helio_axes,
@@ -424,7 +495,8 @@ class GlobeVisualizer:
             self.satellite,
             self.orbit_axes,
             self.satellite_axes,
-            self.llf
+            self.llf,
+            self.robot
         ])
 
         # Earth's orbital parameters (now applied to ECI frame)
@@ -509,6 +581,9 @@ class GlobeVisualizer:
             # Update satellite
             self.satellite.update()
 
+            # Update robot
+            self.robot.update()
+
         glutPostRedisplay()
 
     def keyboard(self, key, x, y):
@@ -521,6 +596,12 @@ class GlobeVisualizer:
             if self.camera.target_frame == self.eci_frame:
                 self.camera.set_target(self.satellite.body_frame)
             elif self.camera.target_frame == self.satellite.body_frame:
+                # When targeting ENU frame, use its local up vector
+                self.camera.set_target(
+                    self.llf.llf_frame,
+                    up_vector=np.array([0, 0, 1])  # Local up in ENU frame
+                )
+            elif self.camera.target_frame == self.llf.llf_frame:
                 self.camera.set_target(self.helio_frame)
             else:
                 self.camera.set_target(self.eci_frame)
