@@ -1,4 +1,4 @@
-# 3D Globe Visualization
+# Bare-bones frame visualizer
 
 A Python-based OpenGL visualization tool that demonstrates various reference frames and orbital mechanics, including Earth's rotation, satellite orbits, and coordinate transformations.
 
